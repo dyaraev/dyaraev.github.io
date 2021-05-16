@@ -1,4 +1,4 @@
-# Detection of malformed records in Apache Spark
+# Detection of malformed records with Apache Spark
 
 When you load data from CSV with Apache Spark and you want to have properly typed data, you can tell Spark to infer types automatically. To do this you need to use the `inferSchema` option:
 
