@@ -34,7 +34,7 @@ def findMalformed(dataLocation: String, schema: StructType)(implicit spark: Spar
 With this function we can get a DataFrame with all the malformed records. This code is very simple, but it works quite slowly and, more importantly, it cannot tell us which columns contain invalid data. To solve this problem, I decided to write a Spark job. The code is available below:
 
 ```scala
-package io.github.dyaraev.example.spark
+package io.github.dyaraev.examples.spark
 
 import SchemaValidator.{FieldInfo, SchemaValidationResult}
 import org.apache.spark.sql.catalyst.encoders.{ExpressionEncoder, RowEncoder}
@@ -182,7 +182,7 @@ As you can see, there are pairs of columns where every other column has the suff
 On the real data the code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `typedDf.map(...)`. Ok, how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
 
 ```scala
-package io.github.dyaraev.example.spark
+package io.github.dyaraev.examples.spark
 
 import SchemaValidator.{FieldInfo, ValidationResult}
 import org.apache.spark.sql.functions._
