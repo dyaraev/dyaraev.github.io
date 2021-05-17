@@ -59,8 +59,6 @@ object SchemaValidator {
 
   case class FieldInfo(untypedName: String, typedName: String, dataType: DataType)
 
-  case class TestRecord(c1: String, c2: String, c3: String, c4: String, c5: String)
-
   case class ValidationResult private(malformedDf: DataFrame, malformedFields: Seq[String])
 }
 
