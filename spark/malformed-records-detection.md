@@ -37,9 +37,9 @@ With this function we can get a DataFrame with all the malformed records. This c
 package io.github.dyaraev.example.spark
 
 import SchemaValidator.{FieldInfo, SchemaValidationResult}
-import org.apache.spark.sql.functions._
 import org.apache.spark.sql.catalyst.encoders.{ExpressionEncoder, RowEncoder}
-import org.apache.spark.sql.types.{ArrayType, DataType, StringType, StructField, StructType}
+import org.apache.spark.sql.functions._
+import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row, SparkSession}
 
 import scala.util.Try
@@ -82,11 +82,6 @@ class SchemaValidator(typedFieldSuffix: String, malformedFieldsColumn: String) e
     ValidationResult(selectAffectedColumns(malformedDf, malformedColumns), malformedColumns)
   }
 
-  private def analyzeData(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
-    val typedDf = addTypedColumns(df, fieldsInfo)
-    typedDf.map(compareFields(fieldsInfo))(createRowEncoder(typedDf.schema))
-  }
-
   private def collectMalformedColumns(malformedDf: DataFrame)(implicit spark: SparkSession): Seq[String] = {
     import spark.implicits._
     malformedDf
@@ -94,6 +89,11 @@ class SchemaValidator(typedFieldSuffix: String, malformedFieldsColumn: String) e
       .distinct()
       .as[String]
       .collect()
+  }
+
+  private def analyzeData(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
+    val typedDf = addTypedColumns(df, fieldsInfo)
+    typedDf.map(compareFields(fieldsInfo))(createRowEncoder(typedDf.schema))
   }
 
   private def selectAffectedColumns(malformedDf: DataFrame, malformedColumns: Seq[String]): DataFrame = {
@@ -208,10 +208,6 @@ class SchemaValidator(typedFieldSuffix: String, malformedFieldsColumn: String) e
     ValidationResult(selectAffectedColumns(malformedDf, malformedFields), malformedFields)
   }
 
-  private def analyzeData(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
-    addTypedColumns(df, fieldsInfo).withColumn(malformedFieldsColumn, comparedFields(fieldsInfo))
-  }
-
   private def collectMalformedColumns(malformedDf: DataFrame)(implicit spark: SparkSession): Seq[String] = {
     import spark.implicits._
     malformedDf
@@ -221,12 +217,16 @@ class SchemaValidator(typedFieldSuffix: String, malformedFieldsColumn: String) e
       .collect()
   }
 
+  private def analyzeData(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
+    addTypedColumns(df, fieldsInfo).withColumn(malformedFieldsColumn, compareFields(fieldsInfo))
+  }
+
   private def selectAffectedColumns(malformedDf: DataFrame, malformedColumns: Seq[String]): DataFrame = {
     val affectedColumns = malformedColumns.flatMap(column => Seq(column, column + typedFieldSuffix))
     malformedDf.selectExpr(affectedColumns :+ malformedFieldsColumn: _*)
   }
 
-  private def comparedFields(fieldsInfo: Seq[FieldInfo]): Column = {
+  private def compareFields(fieldsInfo: Seq[FieldInfo]): Column = {
     val expressions = fieldsInfo.map {
       case FieldInfo(untypedName, typedName, _) =>
         when(col(untypedName).isNull =!= col(typedName).isNull, lit(untypedName)).otherwise(lit(""))
