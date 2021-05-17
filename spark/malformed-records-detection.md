@@ -181,7 +181,7 @@ Not all of the rows in the dataset can be mapped to the schema. This is how the 
 
 As you can see, there are pairs of columns where every other column has the suffix `_TYPED`. The prefix can be changed if there is a chance that one of the columns in the original DataFrame could have a name ending with that suffix. The last column contains a list of bad columns for each row. 
 
-The code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `typedDf.map(...)`. Ok, how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
+On the real data the code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `typedDf.map(...)`. Ok, how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
 
 ```scala
 package io.github.dyaraev.example.spark
