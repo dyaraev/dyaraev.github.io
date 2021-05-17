@@ -31,26 +31,23 @@ def findMalformedRecords(dataLocation: String, schema: StructType)(implicit spar
 }
 ```
 
-With this function we can get a data frame with all the malformed records. This code is very simple, but it works quite slowly and, more importantly, it cannot tell us which columns contain invalid data. To solve this problem, I decided to write a Spark job. The code is available below:
+With this function we can get a DataFrame with all the malformed records. This code is very simple, but it works quite slowly and, more importantly, it cannot tell us which columns contain invalid data. To solve this problem, I decided to write a Spark job. The code is available below:
 
 ```scala
 object SchemaValidator {
 
-  private val TypedFieldSuffix = "_TYPED"
+  private val TypedColumnSuffix = "_TYPED"
   private val ValidationInfoColumn = "validation_info"
 
   case class FieldInfo(untypedName: String, typedName: String, dataType: DataType)
 
-  case class SchemaValidationResult(df: DataFrame, malformedColumns: Seq[String]) {
-    def isValid: Boolean = malformedColumns.isEmpty
-  }
+  case class SchemaValidationResult(df: DataFrame, malformedColumns: Seq[String])
 
-  def apply(): SchemaValidator = {
-    SchemaValidator(TypedFieldSuffix, ValidationInfoColumn)
-  }
+  def apply(): SchemaValidator = SchemaValidator(TypedColumnSuffix, ValidationInfoColumn)
 }
 
-case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: String) {
+case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: String) {
+
   def findMalformedRecords(df: DataFrame, schema: StructType)(implicit spark: SparkSession): Try[SchemaValidationResult] = Try {
     if (df.schema.fields.length != schema.fields.length) {
       throw new RuntimeException(s"Unable to map ${schema.fields.length} schema fields to dataframe containing ${df.schema.fields.length} columns")
@@ -66,9 +63,25 @@ case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: Strin
     val malformedColumns = collectMalformedColumns(malformedDf)
 
     SchemaValidationResult(
-      malformedDf.selectExpr(malformedColumns.flatMap(x => Seq(x, x + typedFieldSuffix)): _*),
+      malformedDf.selectExpr(malformedColumns.flatMap(c => Seq(c, c + typedColumnSuffix)) :+ validationInfoColumn: _*),
       malformedColumns
     )
+  }
+
+  private def addTypedColumns(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
+    fieldsInfo.foldLeft(df.toDF(fieldsInfo.map(_.untypedName): _*)) {
+      case (df, FieldInfo(untypedName, typedName, dataType)) => df.withColumn(typedName, col(untypedName).cast(dataType))
+    }
+  }
+
+  private def collectMalformedColumns(malformedDf: DataFrame)(implicit spark: SparkSession): Seq[String] = {
+    import spark.implicits._
+
+    malformedDf
+      .select(explode(col(validationInfoColumn)).as(validationInfoColumn))
+      .distinct()
+      .as[String]
+      .collect()
   }
 
   private def compareFields(fieldsInfo: Seq[FieldInfo])(row: Row): Row = {
@@ -89,49 +102,43 @@ case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: Strin
   }
 
   private def combineFieldsInfo(schema: StructType): Seq[FieldInfo] = {
-    schema.fields.map(f => FieldInfo(f.name, f.name + typedFieldSuffix, f.dataType))
-  }
-
-  private def addTypedColumns(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
-    fieldsInfo.foldLeft(df.toDF(fieldsInfo.map(_.untypedName): _*)) {
-      case (df, FieldInfo(untypedName, typedName, dataType)) => df.withColumn(typedName, col(untypedName).cast(dataType))
-    }
-  }
-
-  private def collectMalformedColumns(malformedDf: DataFrame)(implicit spark: SparkSession): Seq[String] = {
-    import spark.implicits._
-
-    malformedDf
-      .select(explode(col(validationInfoColumn)).as(validationInfoColumn))
-      .distinct()
-      .as[String]
-      .collect()
+    schema.fields.map(field => FieldInfo(field.name, field.name + typedColumnSuffix, field.dataType))
   }
 }
 ```
 
-The logic of the job is simple. It loads the data as plain strings and then adds a typed column for each of the existing columns. The types are taken from the provided schema, and the built-in `cast` function is used for creating typed columns. So we have pairs of columns. It's worth noting that any values in a column that are incompatible with the type are replaced with null values. Now all we have to do is check which values have been replaced with nulls.
+The logic of the job is simple. It loads the data as plain strings and then adds a typed column for each of the existing columns. The types are taken from the provided schema, and the built-in `cast` function is used for creating typed columns. So we have pairs of columns. It's worth noting that any values in a column that are incompatible with the type are replaced with null values. Now all we have to do is check which values have been replaced with nulls. This is how the result DataFrame looks like:
 
-The code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `combinedDf.map(...)`. Ok how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allows the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
+```
++----+----------+----+----------+----+----------+------------------+
+|col1|col1_TYPED|col2|col2_TYPED|col3|col3_TYPED|validation_info   |
++----+----------+----+----------+----+----------+------------------+
+|null|null      |E   |null      |S   |null      |[col2, col3]      |
+|null|null      |E   |null      |S   |null      |[col2, col3]      |
+|null|null      |E   |null      |J   |null      |[col2, col3]      |
+|null|null      |K   |null      |K   |null      |[col2, col3]      |
+|null|null      |O   |null      |K   |null      |[col2, col3]      |
+|/   |null      |E   |null      |Q   |null      |[col1, col2, col3]|
++----+----------+----+----------+----+----------+------------------+
+```
+
+The code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `combinedDf.map(...)`. Ok how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
 
 ```scala
 object SchemaValidator {
 
-  private val TypedFieldSuffix = "_TYPED"
+  private val TypedColumnSuffix = "_TYPED"
   private val ValidationInfoColumn = "validation_info"
 
   case class FieldInfo(untypedName: String, typedName: String, dataType: DataType)
 
-  case class SchemaValidationResult(df: DataFrame, malformedColumns: Seq[String]) {
-    def isValid: Boolean = malformedColumns.isEmpty
-  }
+  case class SchemaValidationResult(df: DataFrame, malformedColumns: Seq[String])
 
-  def apply(): SchemaValidator = {
-    SchemaValidator(TypedFieldSuffix, ValidationInfoColumn)
-  }
+  def apply(): SchemaValidator = SchemaValidator(TypedColumnSuffix, ValidationInfoColumn)
 }
 
-case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: String) {
+case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: String) {
+
   def findMalformedRecords(df: DataFrame, schema: StructType)(implicit spark: SparkSession): Try[SchemaValidationResult] = Try {
     if (df.schema.fields.length != schema.fields.length) {
       throw new RuntimeException(s"Unable to map ${schema.fields.length} schema fields to dataframe containing ${df.schema.fields.length} columns")
@@ -146,27 +153,10 @@ case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: Strin
     val malformedColumns = collectMalformedColumns(malformedDf)
 
     SchemaValidationResult(
-      malformedDf.selectExpr(malformedColumns.flatMap(x => Seq(x, x + typedFieldSuffix)): _*),
+      malformedDf.selectExpr(malformedColumns.flatMap(c => Seq(c, c + typedColumnSuffix)) :+ validationInfoColumn: _*),
       malformedColumns
     )
-  }
-
-  private def compareFields(fieldsInfo: Seq[FieldInfo]): Column = {
-    val expressions = fieldsInfo.map {
-      case FieldInfo(untypedName, typedName, _) => when(col(untypedName).isNull =!= col(typedName).isNull, lit(untypedName)).otherwise(lit(""))
-    }
-    array_remove(functions.array(expressions: _*), "")
-  }
-
-  private def combineFieldsInfo(schema: StructType): Seq[FieldInfo] = {
-    schema.fields.map(f => FieldInfo(f.name, f.name + typedFieldSuffix, f.dataType))
-  }
-
-  private def addTypedColumns(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
-    fieldsInfo.foldLeft(df.toDF(fieldsInfo.map(_.untypedName): _*)) {
-      case (df, FieldInfo(untypedName, typedName, dataType)) => df.withColumn(typedName, col(untypedName).cast(dataType))
-    }
-  }
+  }  
 
   private def collectMalformedColumns(malformedDf: DataFrame)(implicit spark: SparkSession): Seq[String] = {
     import spark.implicits._
@@ -176,6 +166,23 @@ case class SchemaValidator(typedFieldSuffix: String, validationInfoColumn: Strin
       .distinct()
       .as[String]
       .collect()
+  }
+
+  private def addTypedColumns(df: DataFrame, fieldsInfo: Seq[FieldInfo]): DataFrame = {
+    fieldsInfo.foldLeft(df.toDF(fieldsInfo.map(_.untypedName): _*)) {
+      case (df, FieldInfo(untypedName, typedName, dataType)) => df.withColumn(typedName, col(untypedName).cast(dataType))
+    }
+  }  
+
+  private def compareFields(fieldsInfo: Seq[FieldInfo]): Column = {
+    val expressions = fieldsInfo.map {
+      case FieldInfo(untypedName, typedName, _) => when(col(untypedName).isNull =!= col(typedName).isNull, lit(untypedName)).otherwise(lit(""))
+    }
+    array_remove(functions.array(expressions: _*), "")
+  }
+
+  private def combineFieldsInfo(schema: StructType): Seq[FieldInfo] = {
+    schema.fields.map(field => FieldInfo(field.name, field.name + typedColumnSuffix, field.dataType))
   }
 }
 ```
