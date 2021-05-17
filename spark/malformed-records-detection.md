@@ -18,7 +18,7 @@ Hence, there are two problems that these modes cannot solve: give us information
 
 
 ```scala
-def findMalformedRecords(dataLocation: String, schema: StructType)(implicit spark: SparkSession): DataFrame = {
+def findMalformed(dataLocation: String, schema: StructType)(implicit spark: SparkSession): DataFrame = {
   val fullDf = spark.read
     .csv(dataLocation)
     
@@ -220,7 +220,7 @@ class SchemaValidator(typedFieldSuffix: String, malformedFieldsColumn: String) e
   }
 
   private def selectAffectedColumns(malformedDf: DataFrame, malformedColumns: Seq[String]): DataFrame = {
-    val affectedColumns = malformedColumns.flatMap(column => Seq(column, column + typedFieldSuffix))
+    val affectedColumns = malformedColumns.flatMap(c => Seq(c, c + typedFieldSuffix))
     malformedDf.selectExpr(affectedColumns :+ malformedFieldsColumn: _*)
   }
 
