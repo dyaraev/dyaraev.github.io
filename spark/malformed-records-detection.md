@@ -53,11 +53,11 @@ case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: Stri
       throw new RuntimeException(s"Unable to map ${schema.fields.length} schema fields to dataframe containing ${df.schema.fields.length} columns")
     }
 
-    val combinedFieldsInfo = combineFieldsInfo(schema)
-    val combinedDf = addTypedColumns(df, combinedFieldsInfo)
+    val fieldsInfo = prepareFieldsInfo(schema)
+    val typedDf = addTypedColumns(df, fieldsInfo)
 
-    val malformedDf = combinedDf
-      .map(compareFields(combinedFieldsInfo))(createRowEncoder(combinedDf.schema))
+    val malformedDf = typedDf
+      .map(compareFields(fieldsInfo))(createRowEncoder(typedDf.schema))
       .filter(size(col(validationInfoColumn)) > 0)
 
     val malformedColumns = collectMalformedColumns(malformedDf)
@@ -101,7 +101,7 @@ case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: Stri
     RowEncoder.apply(StructType(schema.fields :+ StructField(validationInfoColumn, ArrayType(StringType))))
   }
 
-  private def combineFieldsInfo(schema: StructType): Seq[FieldInfo] = {
+  private def prepareFieldsInfo(schema: StructType): Seq[FieldInfo] = {
     schema.fields.map(field => FieldInfo(field.name, field.name + typedColumnSuffix, field.dataType))
   }
 }
@@ -122,7 +122,7 @@ The logic of the job is simple. It loads the data as plain strings and then adds
 +----+----------+----+----------+----+----------+------------------+
 ```
 
-The code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `combinedDf.map(...)`. Ok how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
+The code above works pretty slowly. The DAG shows that two additional steps are required to deserialize and serialize values in `typedDf.map(...)`. Ok how can we optimize it? First of all, it's always better to use the built-in Spark functions, which allow the Catalyst engine to optimize job execution. Let's check how we can rewrite it using these functions:
 
 ```scala
 object SchemaValidator {
@@ -144,10 +144,10 @@ case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: Stri
       throw new RuntimeException(s"Unable to map ${schema.fields.length} schema fields to dataframe containing ${df.schema.fields.length} columns")
     }
 
-    val combinedFieldsInfo = combineFieldsInfo(schema)
+    val fieldsInfo = prepareFieldsInfo(schema)
     
-    val malformedDf = addTypedColumns(df, combinedFieldsInfo)
-      .withColumn(validationInfoColumn, comparedFields(combinedFieldsInfo))
+    val malformedDf = addTypedColumns(df, fieldsInfo)
+      .withColumn(validationInfoColumn, comparedFields(fieldsInfo))
       .filter(size(col(validationInfoColumn)) > 0)
 
     val malformedColumns = collectMalformedColumns(malformedDf)
@@ -181,7 +181,7 @@ case class SchemaValidator(typedColumnSuffix: String, validationInfoColumn: Stri
     array_remove(functions.array(expressions: _*), "")
   }
 
-  private def combineFieldsInfo(schema: StructType): Seq[FieldInfo] = {
+  private def prepareFieldsInfo(schema: StructType): Seq[FieldInfo] = {
     schema.fields.map(field => FieldInfo(field.name, field.name + typedColumnSuffix, field.dataType))
   }
 }
